@@ -68,8 +68,9 @@
 
 .hero-image-wrapper {
   width: 100%;
-  max-width: 380px;
+  max-width: 300px;
   overflow: hidden;
+  margin-top: 10%;
   transition:
     transform 0.4s ease,
     box-shadow 0.4s ease;

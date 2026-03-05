@@ -5,6 +5,7 @@ import { ref, onMounted, onUnmounted, reactive, computed } from 'vue'
 const nodes = reactive([]) // { id, x, y, label }
 const adjacencyList = reactive({}) // { nodeId: [{ toId, weight }, ...] }
 let nextId = 0
+let lastCreationTime = 0 // Para evitar doble prompt en móvil/desktop
 
 // ─── Estado del canvas ───
 const canvasRef = ref(null)
@@ -55,9 +56,15 @@ const stats = computed(() => {
 // ─── Helpers ───
 function getMousePos(e) {
   const rect = canvasRef.value.getBoundingClientRect()
+
+  // Soporte para eventos de mouse y touch
+  const touch = e.touches?.[0] || e.changedTouches?.[0]
+  const clientX = touch ? touch.clientX : e.clientX
+  const clientY = touch ? touch.clientY : e.clientY
+
   return {
-    x: e.clientX - rect.left,
-    y: e.clientY - rect.top,
+    x: clientX - rect.left,
+    y: clientY - rect.top,
   }
 }
 
@@ -85,7 +92,7 @@ function generateLabel(id) {
 
 // ─── Buscar arista cerca de un punto (para click) ───
 function findEdgeAt(x, y) {
-  const threshold = 10
+  const threshold = 15 // Aumentado para facilitar toque en móviles
 
   for (const [fromId, edges] of Object.entries(adjacencyList)) {
     const fromNode = nodes.find((n) => n.id === Number(fromId))
@@ -169,6 +176,7 @@ function promptWeight(defaultVal = '1') {
 
 // ─── Crear nodo (doble click) ───
 function onDoubleClick(e) {
+  if (isEraseMode.value) return // No crear nodos mientras se borra
   const pos = getMousePos(e)
   if (findNodeAt(pos.x, pos.y)) return
 
@@ -177,6 +185,7 @@ function onDoubleClick(e) {
   const label = prompt('Ingrese el nombre del vértice:', defaultLabel) || defaultLabel
 
   nodes.push({ id, x: pos.x, y: pos.y, label })
+  lastCreationTime = Date.now() // Marcar el momento de creación para evitar onClick inmediato
   adjacencyList[id] = []
   draw()
 }
@@ -184,6 +193,10 @@ function onDoubleClick(e) {
 // ─── Click simple: editar peso de arista ───
 function onClick(e) {
   if (hasMoved.value) return
+
+  // Evitar el doble prompt si acabamos de crear un nodo (común en dblclick/móvil)
+  if (Date.now() - lastCreationTime < 400) return
+
   const pos = getMousePos(e)
 
   // Modo borrar: eliminar nodos o aristas
@@ -237,24 +250,37 @@ function onClick(e) {
 // ─── Iniciar arrastre desde un nodo ───
 function onMouseDown(e) {
   const pos = getMousePos(e)
-  const node = findNodeAt(pos.x, pos.y)
   hasMoved.value = false
+
+  // En modo borrar no iniciamos arrastre de aristas
+  if (isEraseMode.value) return
+
+  const node = findNodeAt(pos.x, pos.y)
   if (node) {
     dragging.value = true
     dragFrom.value = node
     mousePos.x = pos.x
     mousePos.y = pos.y
-    e.preventDefault()
+    // No usamos preventDefault aquí para permitir que el evento 'click' se dispare en móviles
   }
 }
 
 function onMouseMove(e) {
   if (!dragging.value) return
-  hasMoved.value = true
   const pos = getMousePos(e)
-  mousePos.x = pos.x
-  mousePos.y = pos.y
-  draw()
+
+  // Umbral de movimiento para evitar que toques accidentales cuenten como arrastre
+  const dist = Math.sqrt((pos.x - mousePos.x) ** 2 + (pos.y - mousePos.y) ** 2)
+  if (dist > 6) {
+    hasMoved.value = true
+  }
+
+  // Solo actualizar mousePos visual si realmente nos estamos moviendo o ya se marcó el movimiento
+  if (hasMoved.value) {
+    mousePos.x = pos.x
+    mousePos.y = pos.y
+    draw()
+  }
 }
 
 function onMouseUp(e) {
@@ -588,6 +614,9 @@ onUnmounted(() => {
         @mousemove="onMouseMove"
         @mouseup="onMouseUp"
         @mouseleave="onMouseUp"
+        @touchstart="onMouseDown"
+        @touchmove.prevent="onMouseMove"
+        @touchend="onMouseUp"
       ></canvas>
     </div>
 
@@ -606,7 +635,7 @@ onUnmounted(() => {
         :class="{ active: isEraseMode }"
         @click="isEraseMode = !isEraseMode"
       >
-        {{ isEraseMode ? 'Modo Dibujo' : 'Modo Borrar' }}
+        {{ isEraseMode ? 'Borrando...' : 'Modo Borrar' }}
       </button>
       <button class="btn btn-matrix" @click="showMatrix = !showMatrix">Matriz</button>
       <button class="btn btn-save" @click="saveGraph">Guardar</button>
@@ -745,6 +774,7 @@ canvas {
   display: block;
   width: 100%;
   height: 100%;
+  touch-action: none; /* Crucial para evitar scroll al arrastrar en móviles */
 }
 
 /* ─── Controles ─── */
