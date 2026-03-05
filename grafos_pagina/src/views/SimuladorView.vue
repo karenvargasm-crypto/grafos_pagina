@@ -38,6 +38,15 @@ const promptState = reactive({
   isNumeric: false,
 })
 
+// ─── Estado del Alerta Personalizada ───
+const alertState = reactive({
+  show: false,
+  title: '',
+  message: '',
+  isError: false,
+  resolve: null,
+})
+
 function showCustomPrompt(title, message, defaultValue = '', isNumeric = false) {
   return new Promise((resolve) => {
     promptState.title = title
@@ -53,7 +62,7 @@ function handlePromptConfirm() {
   if (promptState.isNumeric) {
     const num = Number(promptState.inputValue)
     if (isNaN(num)) {
-      alert('El peso debe ser un valor numérico.')
+      showCustomAlert('Error', 'El peso debe ser un valor numérico.', true)
       return
     }
     promptState.resolve(num)
@@ -66,6 +75,22 @@ function handlePromptConfirm() {
 function handlePromptCancel() {
   promptState.resolve(null)
   promptState.show = false
+}
+
+// ─── Alerta personalizada (reemplaza alert() nativo) ───
+function showCustomAlert(title, message, isError = false) {
+  return new Promise((resolve) => {
+    alertState.title = title
+    alertState.message = message
+    alertState.isError = isError
+    alertState.resolve = resolve
+    alertState.show = true
+  })
+}
+
+function handleAlertClose() {
+  alertState.resolve()
+  alertState.show = false
 }
 
 // ─── Estadísticas de la Matriz (Computadas) ───
@@ -642,9 +667,9 @@ function handleFileUpload(event) {
       Object.assign(adjacencyList, parsed.adjacencyList)
       nextId = parsed.nextId || nodes.length
       draw()
-      alert('Grafo cargado exitosamente.')
+      showCustomAlert('¡Listo!', 'Grafo cargado exitosamente. ✨')
     } catch (err) {
-      alert('Error al cargar el archivo: ' + err.message)
+      showCustomAlert('Error', 'Error al cargar el archivo: ' + err.message, true)
     }
     // reset input para permitir cargar el mismo archivo
     event.target.value = ''
@@ -832,6 +857,23 @@ onUnmounted(() => {
           <div class="prompt-footer">
             <button class="btn btn-cancel" @click="handlePromptCancel">Cancelar</button>
             <button class="btn btn-confirm" @click="handlePromptConfirm">Aceptar</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- Alerta Personalizada -->
+    <transition name="fade">
+      <div v-if="alertState.show" class="prompt-overlay" @click.self="handleAlertClose">
+        <div class="prompt-modal alert-modal">
+          <div class="prompt-header">
+            <h3 :class="{ 'alert-error': alertState.isError }">{{ alertState.title }}</h3>
+          </div>
+          <div class="prompt-body">
+            <p>{{ alertState.message }}</p>
+          </div>
+          <div class="prompt-footer">
+            <button class="btn btn-confirm" @click="handleAlertClose">Aceptar</button>
           </div>
         </div>
       </div>
@@ -1224,5 +1266,14 @@ canvas {
 .btn-cancel:hover {
   background: #f8bbd0;
   transform: translateY(-2px);
+}
+
+/* ─── Alerta Personalizada ─── */
+.alert-modal .prompt-footer {
+  justify-content: center;
+}
+
+.alert-error {
+  color: #e74c6f !important;
 }
 </style>
