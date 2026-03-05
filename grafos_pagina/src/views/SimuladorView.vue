@@ -22,6 +22,52 @@ const hasMoved = ref(false)
 const isEraseMode = ref(false)
 const showMatrix = ref(false)
 
+// ─── Estado de movimiento de nodos ───
+const isMovingNode = ref(false)
+const movingNode = ref(null)
+let longPressTimeout = null
+const LONG_PRESS_DURATION = 500 // ms
+
+// ─── Estado del Prompt Personalizado ───
+const promptState = reactive({
+  show: false,
+  title: '',
+  message: '',
+  inputValue: '',
+  resolve: null,
+  isNumeric: false,
+})
+
+function showCustomPrompt(title, message, defaultValue = '', isNumeric = false) {
+  return new Promise((resolve) => {
+    promptState.title = title
+    promptState.message = message
+    promptState.inputValue = defaultValue
+    promptState.isNumeric = isNumeric
+    promptState.resolve = resolve
+    promptState.show = true
+  })
+}
+
+function handlePromptConfirm() {
+  if (promptState.isNumeric) {
+    const num = Number(promptState.inputValue)
+    if (isNaN(num)) {
+      alert('El peso debe ser un valor numérico.')
+      return
+    }
+    promptState.resolve(num)
+  } else {
+    promptState.resolve(promptState.inputValue)
+  }
+  promptState.show = false
+}
+
+function handlePromptCancel() {
+  promptState.resolve(null)
+  promptState.show = false
+}
+
 // ─── Estadísticas de la Matriz (Computadas) ───
 const stats = computed(() => {
   if (!nodes.length) return null
@@ -164,25 +210,29 @@ function pointToSegmentDist(px, py, ax, ay, bx, by) {
 }
 
 // ─── Pedir peso numérico ───
-function promptWeight(defaultVal = '1') {
-  while (true) {
-    const input = prompt('Ingrese el peso de la arista (numérico):', defaultVal)
-    if (input === null) return null // cancelado
-    const num = Number(input)
-    if (!isNaN(num)) return num
-    alert('El peso debe ser un valor numérico.')
-  }
+async function promptWeight(defaultVal = '1') {
+  return await showCustomPrompt(
+    'Peso de la Arista',
+    'Ingrese el peso de la arista (numérico):',
+    defaultVal,
+    true,
+  )
 }
 
 // ─── Crear nodo (doble click) ───
-function onDoubleClick(e) {
+async function onDoubleClick(e) {
   if (isEraseMode.value) return // No crear nodos mientras se borra
   const pos = getMousePos(e)
   if (findNodeAt(pos.x, pos.y)) return
 
   const id = nextId++
   const defaultLabel = generateLabel(id)
-  const label = prompt('Ingrese el nombre del vértice:', defaultLabel) || defaultLabel
+  const labelInput = await showCustomPrompt(
+    'Nuevo Vértice',
+    'Ingrese el nombre del vértice:',
+    defaultLabel,
+  )
+  const label = labelInput || defaultLabel
 
   nodes.push({ id, x: pos.x, y: pos.y, label })
   lastCreationTime = Date.now() // Marcar el momento de creación para evitar onClick inmediato
@@ -191,7 +241,7 @@ function onDoubleClick(e) {
 }
 
 // ─── Click simple: editar peso de arista ───
-function onClick(e) {
+async function onClick(e) {
   if (hasMoved.value) return
 
   // Evitar el doble prompt si acabamos de crear un nodo (común en dblclick/móvil)
@@ -228,7 +278,11 @@ function onClick(e) {
   // Click en nodo para editar nombre
   const nodeHit = findNodeAt(pos.x, pos.y)
   if (nodeHit) {
-    const newLabel = prompt('Editar nombre del vértice:', nodeHit.label)
+    const newLabel = await showCustomPrompt(
+      'Editar Vértice',
+      'Editar nombre del vértice:',
+      nodeHit.label,
+    )
     if (newLabel !== null && newLabel.trim() !== '') {
       nodeHit.label = newLabel
       draw()
@@ -240,7 +294,7 @@ function onClick(e) {
   const hit = findEdgeAt(pos.x, pos.y)
   if (!hit) return
 
-  const newWeight = promptWeight(String(hit.edge.weight))
+  const newWeight = await promptWeight(String(hit.edge.weight))
   if (newWeight !== null) {
     adjacencyList[hit.fromId][hit.edgeIndex].weight = newWeight
     draw()
@@ -261,7 +315,15 @@ function onMouseDown(e) {
     dragFrom.value = node
     mousePos.x = pos.x
     mousePos.y = pos.y
-    // No usamos preventDefault aquí para permitir que el evento 'click' se dispare en móviles
+
+    // Iniciar timer para long press (mover nodo)
+    clearTimeout(longPressTimeout)
+    longPressTimeout = setTimeout(() => {
+      if (!hasMoved.value) {
+        isMovingNode.value = true
+        movingNode.value = node
+      }
+    }, LONG_PRESS_DURATION)
   }
 }
 
@@ -269,32 +331,50 @@ function onMouseMove(e) {
   if (!dragging.value) return
   const pos = getMousePos(e)
 
-  // Umbral de movimiento para evitar que toques accidentales cuenten como arrastre
+  // Umbral de movimiento
   const dist = Math.sqrt((pos.x - mousePos.x) ** 2 + (pos.y - mousePos.y) ** 2)
   if (dist > 6) {
     hasMoved.value = true
+    // Si se mueve antes del long press, cancelar la posibilidad de mover el nodo
+    if (!isMovingNode.value) {
+      clearTimeout(longPressTimeout)
+    }
   }
 
-  // Solo actualizar mousePos visual si realmente nos estamos moviendo o ya se marcó el movimiento
-  if (hasMoved.value) {
+  if (isMovingNode.value && movingNode.value) {
+    // Mover nodo
+    movingNode.value.x = pos.x
+    movingNode.value.y = pos.y
+    draw()
+  } else if (hasMoved.value) {
+    // Dibujar línea de arista
     mousePos.x = pos.x
     mousePos.y = pos.y
     draw()
   }
 }
 
-function onMouseUp(e) {
+async function onMouseUp(e) {
+  clearTimeout(longPressTimeout)
+
   if (!dragging.value) return
   const pos = getMousePos(e)
-  const targetNode = findNodeAt(pos.x, pos.y)
 
-  // Solo crear arista si hubo movimiento (previene doble prompt con onClick)
-  if (targetNode && hasMoved.value) {
-    const existing = adjacencyList[dragFrom.value.id].find((edge) => edge.toId === targetNode.id)
-    if (!existing) {
-      const weight = promptWeight('1')
-      if (weight !== null) {
-        adjacencyList[dragFrom.value.id].push({ toId: targetNode.id, weight })
+  if (isMovingNode.value) {
+    // Terminó de mover el nodo
+    isMovingNode.value = false
+    movingNode.value = null
+  } else {
+    // Intentar crear arista
+    const targetNode = findNodeAt(pos.x, pos.y)
+    // Solo crear arista si hubo movimiento (previene doble prompt con onClick)
+    if (targetNode && hasMoved.value) {
+      const existing = adjacencyList[dragFrom.value.id].find((edge) => edge.toId === targetNode.id)
+      if (!existing) {
+        const weight = await promptWeight('1')
+        if (weight !== null) {
+          adjacencyList[dragFrom.value.id].push({ toId: targetNode.id, weight })
+        }
       }
     }
   }
@@ -521,9 +601,13 @@ function clearGraph() {
   }
 }
 
-function saveGraph() {
+async function saveGraph() {
   const defaultName = 'mi_grafo'
-  const fileName = prompt('Ingrese un nombre para el archivo:', defaultName)
+  const fileName = await showCustomPrompt(
+    'Guardar Grafo',
+    'Ingrese un nombre para el archivo:',
+    defaultName,
+  )
   if (!fileName) return
 
   const data = JSON.stringify({ nodes, adjacencyList, nextId }, null, 2)
@@ -723,6 +807,32 @@ onUnmounted(() => {
             </table>
           </div>
           <p v-else class="empty-msg">No hay nodos en el grafo.</p>
+        </div>
+      </div>
+    </transition>
+
+    <!-- Prompt Personalizado -->
+    <transition name="fade">
+      <div v-if="promptState.show" class="prompt-overlay" @click.self="handlePromptCancel">
+        <div class="prompt-modal">
+          <div class="prompt-header">
+            <h3>{{ promptState.title }}</h3>
+          </div>
+          <div class="prompt-body">
+            <p>{{ promptState.message }}</p>
+            <input
+              v-model="promptState.inputValue"
+              class="prompt-input"
+              @keyup.enter="handlePromptConfirm"
+              @keyup.esc="handlePromptCancel"
+              ref="promptInputRef"
+              autofocus
+            />
+          </div>
+          <div class="prompt-footer">
+            <button class="btn btn-cancel" @click="handlePromptCancel">Cancelar</button>
+            <button class="btn btn-confirm" @click="handlePromptConfirm">Aceptar</button>
+          </div>
         </div>
       </div>
     </transition>
@@ -1016,5 +1126,103 @@ canvas {
   .page-title {
     font-size: 1.5rem;
   }
+}
+/* ─── Prompt Personalizado ─── */
+.prompt-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(212, 114, 154, 0.15);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.prompt-modal {
+  background: white;
+  padding: 1.8rem;
+  border-radius: 24px;
+  width: 90%;
+  max-width: 380px;
+  box-shadow: 0 15px 40px rgba(212, 114, 154, 0.2);
+  border: 2px solid #f8bbd0;
+  animation: modalPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes modalPop {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.prompt-header h3 {
+  margin: 0;
+  font-family: 'Pacifico', cursive;
+  color: #d4729a;
+  font-size: 1.4rem;
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.prompt-body p {
+  font-family: 'Quicksand', sans-serif;
+  color: #7d3c5a;
+  margin-bottom: 1rem;
+  font-size: 1rem;
+  text-align: center;
+}
+
+.prompt-input {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border-radius: 12px;
+  border: 2px solid #fce4ec;
+  font-family: 'Quicksand', sans-serif;
+  font-size: 1rem;
+  color: #7d3c5a;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.prompt-input:focus {
+  border-color: #f8bbd0;
+}
+
+.prompt-footer {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.btn-confirm {
+  background: #d4729a;
+  color: white;
+}
+
+.btn-confirm:hover {
+  background: #c25a82;
+  transform: translateY(-2px);
+}
+
+.btn-cancel {
+  background: #fce4ec;
+  color: #d4729a;
+}
+
+.btn-cancel:hover {
+  background: #f8bbd0;
+  transform: translateY(-2px);
 }
 </style>
